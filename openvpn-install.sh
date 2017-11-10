@@ -344,9 +344,8 @@ exit 0' > $RCLOCAL
 	if [[ "$IP" != "$EXTERNALIP" ]]; then
 		echo ""
 		echo "Looks like your server is behind a NAT!"
-		if [[ "$USEREXTERNALIP" != "" ]]; then
-			IP=$EXTERNALIP
-		fi
+		IP=$EXTERNALIP
+
 	fi
 	# client-common.txt is created so we have a template to add further users later
 	echo "client
