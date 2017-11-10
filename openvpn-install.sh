@@ -6,7 +6,10 @@
 # bulletproof but it will probably work if you simply want to setup a VPN on
 # your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
 # universal as possible.
-
+#AWS Specific
+EXTERNALIP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4)
+EXERNALHOST=$(curl http://169.254.169.254/latest/meta-data/public-hostname)
+IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
 
 # Detect Debian users running the script with "sh" instead of bash
 if readlink /proc/$$/exe | grep -qs "dash"; then
@@ -58,14 +61,6 @@ newclient () {
 	cat /etc/openvpn/ta.key >> ~/$1.ovpn
 	echo "</tls-auth>" >> ~/$1.ovpn
 }
-
-# Try to get our IP from the system and fallback to the Internet.
-# I do this to make the script compatible with NATed servers (lowendspirit.com)
-# and to avoid getting an IPv6.
-IP=$(ip addr | grep 'inet' | grep -v inet6 | grep -vE '127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | grep -o -E '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
-if [[ "$IP" = "" ]]; then
-		IP=$(wget -4qO- "http://whatismyip.akamai.com/")
-fi
 
 if [[ -e /etc/openvpn/server.conf ]]; then
 	while :
@@ -132,24 +127,24 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 				PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
 				PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
 				if pgrep firewalld; then
-					IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s 10.8.0.0/24 '"'"'!'"'"' -d 10.8.0.0/24 -j SNAT --to ' | cut -d " " -f 10)
+					IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s 172.24.62.0/24 '"'"'!'"'"' -d 172.24.62.0/24 -j SNAT --to ' | cut -d " " -f 10)
 					# Using both permanent and not permanent rules to avoid a firewalld reload.
 					firewall-cmd --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --zone=trusted --remove-source=10.8.0.0/24
+					firewall-cmd --zone=trusted --remove-source=172.24.62.0/24
 					firewall-cmd --permanent --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --permanent --zone=trusted --remove-source=10.8.0.0/24
-					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+					firewall-cmd --permanent --zone=trusted --remove-source=172.24.62.0/24
+					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
+					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
 				else
-					IP=$(grep 'iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
-					iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-					sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 ! -d 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
+					IP=$(grep 'iptables -t nat -A POSTROUTING -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
+					iptables -t nat -D POSTROUTING -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
+					sed -i '/iptables -t nat -A POSTROUTING -s 172.24.62.0\/24 ! -d 172.24.62.0\/24 -j SNAT --to /d' $RCLOCAL
 					if iptables -L -n | grep -qE '^ACCEPT'; then
 						iptables -D INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-						iptables -D FORWARD -s 10.8.0.0/24 -j ACCEPT
+						iptables -D FORWARD -s 172.24.62.0/24 -j ACCEPT
 						iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 						sed -i "/iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT/d" $RCLOCAL
-						sed -i "/iptables -I FORWARD -s 10.8.0.0\/24 -j ACCEPT/d" $RCLOCAL
+						sed -i "/iptables -I FORWARD -s 172.24.62.0\/24 -j ACCEPT/d" $RCLOCAL
 						sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
 					fi
 				fi
@@ -181,45 +176,11 @@ else
 	clear
 	echo 'Welcome to this quick OpenVPN "road warrior" installer'
 	echo ""
-	# OpenVPN setup and first user creation
-	echo "I need to ask you a few questions before starting the setup"
-	echo "You can leave the default options and just press enter if you are ok with them"
 	echo ""
-	echo "First I need to know the IPv4 address of the network interface you want OpenVPN"
-	echo "listening to."
-	read -p "IP address: " -e -i $IP IP
-	echo ""
-	echo "Which protocol do you want for OpenVPN connections?"
-	echo "   1) UDP (recommended)"
-	echo "   2) TCP"
-	read -p "Protocol [1-2]: " -e -i 1 PROTOCOL
-	case $PROTOCOL in
-		1) 
-		PROTOCOL=udp
-		;;
-		2) 
-		PROTOCOL=tcp
-		;;
-	esac
-	echo ""
-	echo "What port do you want OpenVPN listening to?"
-	read -p "Port: " -e -i 1194 PORT
-	echo ""
-	echo "Which DNS do you want to use with the VPN?"
-	echo "   1) Current system resolvers"
-	echo "   2) Google"
-	echo "   3) OpenDNS"
-	echo "   4) NTT"
-	echo "   5) Hurricane Electric"
-	echo "   6) Verisign"
-	read -p "DNS [1-6]: " -e -i 1 DNS
-	echo ""
-	echo "Finally, tell me your name for the client certificate"
-	echo "Please, use one word only, no special characters"
-	read -p "Client name: " -e -i client CLIENT
-	echo ""
-	echo "Okay, that was all I needed. We are ready to setup your OpenVPN server now"
-	read -n1 -r -p "Press any key to continue..."
+	PROTOCOL=udp
+	PORT=1194
+	DNS=1
+	CLIENT=admin
 	if [[ "$OS" = 'debian' ]]; then
 		apt-get update
 		apt-get install openvpn iptables openssl ca-certificates -y
@@ -269,7 +230,7 @@ dh dh.pem
 auth SHA512
 tls-auth ta.key 0
 topology subnet
-server 10.8.0.0 255.255.255.0
+server 172.24.62.0 255.255.255.0
 ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
 	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server.conf
 	# DNS
@@ -323,12 +284,12 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 		# We don't use --add-service=openvpn because that would only work with
 		# the default port and protocol.
 		firewall-cmd --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --zone=trusted --add-source=10.8.0.0/24
+		firewall-cmd --zone=trusted --add-source=172.24.62.0/24
 		firewall-cmd --permanent --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
+		firewall-cmd --permanent --zone=trusted --add-source=172.24.62.0/24
 		# Set NAT for the VPN subnet
-		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
+		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
 	else
 		# Needed to use rc.local with some systemd distros
 		if [[ "$OS" = 'debian' && ! -e $RCLOCAL ]]; then
@@ -337,17 +298,17 @@ exit 0' > $RCLOCAL
 		fi
 		chmod +x $RCLOCAL
 		# Set NAT for the VPN subnet
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		iptables -t nat -A POSTROUTING -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s 172.24.62.0/24 ! -d 172.24.62.0/24 -j SNAT --to $IP" $RCLOCAL
 		if iptables -L -n | grep -qE '^(REJECT|DROP)'; then
 			# If iptables has at least one REJECT rule, we asume this is needed.
 			# Not the best approach but I can't think of other and this shouldn't
 			# cause problems.
 			iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-			iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT
+			iptables -I FORWARD -s 172.24.62.0/24 -j ACCEPT
 			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 			sed -i "1 a\iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT" $RCLOCAL
-			sed -i "1 a\iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT" $RCLOCAL
+			sed -i "1 a\iptables -I FORWARD -s 172.24.62.0/24 -j ACCEPT" $RCLOCAL
 			sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
 		fi
 	fi
@@ -380,17 +341,11 @@ exit 0' > $RCLOCAL
 			chkconfig openvpn on
 		fi
 	fi
-	# Try to detect a NATed connection and ask about it to potential LowEndSpirit users
-	EXTERNALIP=$(wget -4qO- "http://whatismyip.akamai.com/")
 	if [[ "$IP" != "$EXTERNALIP" ]]; then
 		echo ""
 		echo "Looks like your server is behind a NAT!"
-		echo ""
-		echo "If your server is NATed (e.g. LowEndSpirit), I need to know the external IP"
-		echo "If that's not the case, just ignore this and leave the next field blank"
-		read -p "External IP: " -e USEREXTERNALIP
 		if [[ "$USEREXTERNALIP" != "" ]]; then
-			IP=$USEREXTERNALIP
+			IP=$EXTERNALIP
 		fi
 	fi
 	# client-common.txt is created so we have a template to add further users later
