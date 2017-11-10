@@ -353,7 +353,7 @@ dev tun
 proto $PROTOCOL
 sndbuf 0
 rcvbuf 0
-remote $IP $PORT
+remote $EXTERNALIP $PORT
 resolv-retry infinite
 nobind
 persist-key
