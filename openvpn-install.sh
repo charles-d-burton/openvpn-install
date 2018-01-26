@@ -71,8 +71,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 		echo "What do you want to do?"
 		echo "   1) Add a new user"
 		echo "   2) Revoke an existing user"
-		echo "   3) Remove OpenVPN"
-		echo "   4) Exit"
+		echo "   3) Exit"
 		read -p "Select an option [1-4]: " option
 		case $option in
 			1) 
@@ -120,56 +119,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			echo "Certificate for client $CLIENT revoked"
 			exit
 			;;
-			3) 
-			echo ""
-			read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
-			if [[ "$REMOVE" = 'y' ]]; then
-				PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
-				PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
-				if pgrep firewalld; then
-					IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s ' $GATEWAY_CIDR ' ' ''"'"'!'"'"' -d '$GATEWAY_CIDR ' -j SNAT --to ' | cut -d " " -f 10)
-					# Using both permanent and not permanent rules to avoid a firewalld reload.
-					firewall-cmd --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --zone=trusted --remove-source=$GATEWAY_CIDR
-					firewall-cmd --permanent --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --permanent --zone=trusted --remove-source=$GATEWAY_CIDR
-					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
-					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
-				else
-					IP=$(grep 'iptables -t nat -A POSTROUTING -s '$GATEWAY_CIDR ' ! -d ' $GATEWAY_CIDR ' -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
-					iptables -t nat -D POSTROUTING -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
-					sed -i '/iptables -t nat -A POSTROUTING -s 172.24.62.0\/24 ! -d 172.24.62.0\/24 -j SNAT --to /d' $RCLOCAL
-					if iptables -L -n | grep -qE '^ACCEPT'; then
-						iptables -D INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-						iptables -D FORWARD -s $GATEWAY_CIDR -j ACCEPT
-						iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-						sed -i "/iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT/d" $RCLOCAL
-						sed -i "/iptables -I FORWARD -s 172.24.62.0\/24 -j ACCEPT/d" $RCLOCAL
-						sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
-					fi
-				fi
-				if hash sestatus 2>/dev/null; then
-					if sestatus | grep "Current mode" | grep -qs "enforcing"; then
-						if [[ "$PORT" != '1194' || "$PROTOCOL" = 'tcp' ]]; then
-							semanage port -d -t openvpn_port_t -p $PROTOCOL $PORT
-						fi
-					fi
-				fi
-				if [[ "$OS" = 'debian' ]]; then
-					apt-get remove --purge -y openvpn
-				else
-					yum remove openvpn -y
-				fi
-				rm -rf /etc/openvpn
-				echo ""
-				echo "OpenVPN removed!"
-			else
-				echo ""
-				echo "Removal aborted!"
-			fi
-			exit
-			;;
-			4) exit;;
+			3) exit;;
 		esac
 	done
 else
@@ -230,7 +180,7 @@ dh dh.pem
 auth SHA512
 tls-auth ta.key 0
 topology subnet
-server 172.24.62.0 255.255.255.0
+server $GATEWAY $NETMASK
 ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
 	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server.conf
 	# DNS
@@ -284,12 +234,12 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 		# We don't use --add-service=openvpn because that would only work with
 		# the default port and protocol.
 		firewall-cmd --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --zone=trusted --add-source=$GATEWAY_CIDR
+		firewall-cmd --zone=trusted --add-source=$GATEWAY/$CIDR
 		firewall-cmd --permanent --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --permanent --zone=trusted --add-source=$GATEWAY_CIDR
+		firewall-cmd --permanent --zone=trusted --add-source=$GATEWAY/$CIDR
 		# Set NAT for the VPN subnet
-		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
-		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
+		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $GATEWAY/$CIDR ! -d $GATEWAY/$CIDR -j SNAT --to $IP
+		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $GATEWAY/$CIDR ! -d $GATEWAY/$CIDR -j SNAT --to $IP
 	else
 		# Needed to use rc.local with some systemd distros
 		if [[ "$OS" = 'debian' && ! -e $RCLOCAL ]]; then
@@ -298,17 +248,17 @@ exit 0' > $RCLOCAL
 		fi
 		chmod +x $RCLOCAL
 		# Set NAT for the VPN subnet
-		iptables -t nat -A POSTROUTING -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s $GATEWAY_CIDR ! -d $GATEWAY_CIDR -j SNAT --to $IP" $RCLOCAL
+		iptables -t nat -A POSTROUTING -s $GATEWAY/$CIDR ! -d $GATEWAY/$CIDR -j SNAT --to $IP
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s $GATEWAY/$CIDR ! -d $GATEWAY/$CIDR -j SNAT --to $IP" $RCLOCAL
 		if iptables -L -n | grep -qE '^(REJECT|DROP)'; then
 			# If iptables has at least one REJECT rule, we asume this is needed.
 			# Not the best approach but I can't think of other and this shouldn't
 			# cause problems.
 			iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-			iptables -I FORWARD -s $GATEWAY_CIDR -j ACCEPT
+			iptables -I FORWARD -s $GATEWAY/$CIDR -j ACCEPT
 			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 			sed -i "1 a\iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT" $RCLOCAL
-			sed -i "1 a\iptables -I FORWARD -s $GATEWAY_CIDR -j ACCEPT" $RCLOCAL
+			sed -i "1 a\iptables -I FORWARD -s $GATEWAY/$CIDR -j ACCEPT" $RCLOCAL
 			sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
 		fi
 	fi
